@@ -113,7 +113,7 @@ func Test_replaceConfigValues(t *testing.T) {
 				t.Errorf("replaceLine() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			if got != tt.want {
+			if string(got) != tt.want {
 				t.Errorf("replaceLine() got = '%v', want '%v'", got, tt.want)
 			}
 		})

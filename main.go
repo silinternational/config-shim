@@ -32,20 +32,22 @@ type AppConfigParams struct {
 func main() {
 	params := readFlags()
 
-	cfgBytes, err := getConfig(params)
+	configData, err := getConfig(params)
 	if err != nil {
 		fmt.Printf("failed to get config: %s\n", err)
 		os.Exit(1)
 	}
 
 	if update {
-		if err := updateConfig(params, cfgBytes); err != nil {
+		updatedConfigData, err := updateConfig(params, configData)
+		if err != nil {
 			fmt.Println(err.Error())
 			os.Exit(1)
 		}
+		configData = []byte(updatedConfigData)
 	}
 
-	vars, err := getVars(cfgBytes)
+	vars, err := getVars(configData)
 	if err != nil {
 		fmt.Printf("failed to get vars: %s\n", err)
 		os.Exit(1)
@@ -157,49 +159,49 @@ func getVars(config []byte) ([]string, error) {
 
 // updateConfig looks in the config file for variables that should be updated from the local environment, swaps out
 // the value, and sends the new config file to AWS AppConfig
-func updateConfig(params AppConfigParams, cfgBytes []byte) error {
+func updateConfig(params AppConfigParams, cfgBytes []byte) ([]byte, error) {
 	newCfg, err := replaceConfigValues(cfgBytes)
 	if err != nil {
-		return fmt.Errorf("failure replacing values: %w", err)
+		return nil, fmt.Errorf("failure replacing values: %w", err)
 	}
 
 	err = deployNewConfig(params, newCfg)
 	if err != nil {
-		return fmt.Errorf("failed to deploy config: %w", err)
+		return nil, fmt.Errorf("failed to deploy config: %w", err)
 	}
 
 	if verbose {
 		fmt.Printf("updated config: %s\n", newCfg)
 	}
-	return nil
+	return newCfg, nil
 }
 
 // replaceConfigValues substitutes values from the local environment into designated variables in the config file
-func replaceConfigValues(cfg []byte) (string, error) {
+func replaceConfigValues(cfg []byte) ([]byte, error) {
 	localEnv := os.Environ()
 	envVars, err := godotenv.Parse(strings.NewReader(strings.Join(localEnv, "\n")))
 	if err != nil {
-		return "", fmt.Errorf("failed to parse environment variables using godotenv.Parse: %w", err)
+		return nil, fmt.Errorf("failed to parse environment variables using godotenv.Parse: %w", err)
 	}
 
 	scanner := bufio.NewScanner(bytes.NewReader(cfg))
-	var output strings.Builder
+	var output bytes.Buffer
 	for scanner.Scan() {
 		line := scanner.Text()
 		for k, v := range envVars {
 			var err error
 			line, err = replaceLine(line, k, v)
 			if err != nil {
-				return "", err
+				return nil, err
 			}
 		}
 		output.WriteString(line + "\n")
 	}
 
 	if err = scanner.Err(); err != nil {
-		return "", fmt.Errorf("error reading input: %w", err)
+		return nil, fmt.Errorf("error reading input: %w", err)
 	}
-	return output.String(), nil
+	return output.Bytes(), nil
 }
 
 // replaceLine handles one line of the config file, replacing the variable value if marked for update
@@ -227,7 +229,7 @@ func replaceLine(line, variable, newValue string) (string, error) {
 }
 
 // deployNewConfig submits a new config file to AWS AppConfig and starts a deployment for it
-func deployNewConfig(params AppConfigParams, cfg string) error {
+func deployNewConfig(params AppConfigParams, cfg []byte) error {
 	ctx := context.Background()
 	awsCfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
@@ -239,7 +241,7 @@ func deployNewConfig(params AppConfigParams, cfg string) error {
 	createVersionInput := appconfig.CreateHostedConfigurationVersionInput{
 		ApplicationId:          aws.String(params.applicationID),
 		ConfigurationProfileId: aws.String(params.configProfileID),
-		Content:                []byte(cfg),
+		Content:                cfg,
 		ContentType:            aws.String("text/plain"),
 		Description:            aws.String("updated by config-shim"),
 	}
